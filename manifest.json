@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Alza Helper",
+  "version": "0.1",
+  "description": "Extract Alza product data",
+  "permissions": ["activeTab"],
+  "host_permissions": [
+    "https://www.alza.hu/*",
+    "https://www.arukereso.hu/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.alza.hu/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
