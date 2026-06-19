@@ -3,17 +3,24 @@
   "name": "Alza Helper",
   "version": "0.1",
   "description": "Extract Alza product data",
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "storage", "tabs"],
   "host_permissions": [
     "https://www.alza.hu/*",
-    "https://www.arukereso.hu/*"
+    "https://*.arukereso.hu/*"
   ],
   "content_scripts": [
     {
       "matches": ["https://www.alza.hu/*"],
       "js": ["content.js"]
+    },
+    {
+      "matches": ["https://*.arukereso.hu/*"],
+      "js": ["arukereso-content.js"]
     }
   ],
+  "background": {
+    "scripts": ["background.js"]
+  },
   "action": {
     "default_popup": "popup.html"
   }

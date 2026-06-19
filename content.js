@@ -165,8 +165,11 @@ function updateOverlay(text, state = "running") {
       : "#101827";
 }
 
-function showProgress(page, totalPages, productCount) {
-  updateOverlay(`Scraping page ${page}/${totalPages}. Collected ${productCount} products.`);
+function showProgress(page, productCount) {
+  updateOverlay(
+    `Processed ${page} page${page === 1 ? "" : "s"}. ` +
+    `Collected ${productCount} products.`
+  );
 }
 
 async function scrapeAllPages(options = {}) {
@@ -183,8 +186,6 @@ async function scrapeAllPages(options = {}) {
   updateOverlay("Starting Alza scrape...");
 
   for (let page = options.startPage || 1; page <= finalPage; page++) {
-    showProgress(page, finalPage, products.length);
-
     const oldSignature = productSignature();
     const changedPage = goToPage(page);
 
@@ -210,7 +211,7 @@ async function scrapeAllPages(options = {}) {
     });
 
     products.push(...newProducts);
-    showProgress(page, finalPage, products.length);
+    showProgress(page, products.length);
 
     console.log(
       `Alza scraper: page ${page} had ${pageProducts.length} products, ${newProducts.length} new.`
@@ -226,9 +227,35 @@ async function scrapeAllPages(options = {}) {
   return products;
 }
 
+async function startAlzaAndArukeresoScrape(options) {
+  const products = await scrapeAllPages(options);
+  updateOverlay(
+    `Alza scrape complete. Starting ${products.length} Árukereső lookups...`
+  );
+
+  const lookupJob = await browser.runtime.sendMessage({
+    type: "START_ARUKERESO_LOOKUPS",
+    products,
+    workerName: options?.workerName,
+  });
+
+  if (!lookupJob?.started) {
+    updateOverlay(
+      lookupJob?.reason || "Could not start Árukereső lookups.",
+      "error"
+    );
+  } else {
+    updateOverlay(
+      `Árukereső lookup started for ${products.length} products.`
+    );
+  }
+
+  return { products, lookupJob };
+}
+
 browser.runtime.onMessage.addListener(message => {
   if (message?.type === "SCRAPE_ALZA_CATEGORY") {
-    return scrapeAllPages(message.options);
+    return startAlzaAndArukeresoScrape(message.options);
   }
 
   return undefined;
