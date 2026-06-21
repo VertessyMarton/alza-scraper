@@ -92,6 +92,24 @@ function createSearchUrl(productName) {
   return url.href;
 }
 
+function normalizeSearchQuery(productName) {
+  return productName
+    .replace(
+      /\s+-\s+(?:\d+\s*)?(?:év|éves)\s+garancia.*$/iu,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isCategorySearchUrl(url) {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith("/categorysearch.php");
+  } catch {
+    return false;
+  }
+}
+
 function isArukeresoUrl(url) {
   try {
     const hostname = new URL(url).hostname;
@@ -161,8 +179,8 @@ async function sendScrapeMessage(tabId) {
   throw lastError || new Error("Árukereső content script did not respond.");
 }
 
-async function navigateAndScrape(tabId, product) {
-  const searchUrl = createSearchUrl(product.name);
+async function navigateAndScrapeQuery(tabId, product, searchQuery) {
+  const searchUrl = createSearchUrl(searchQuery);
   const loaded = waitForTabToLoad(tabId);
 
   await browser.tabs.update(tabId, { url: searchUrl });
@@ -172,7 +190,7 @@ async function navigateAndScrape(tabId, product) {
   return {
     status: scraped.status,
     matchSource: scraped.status === "matched" ? "automatic" : null,
-    searchQuery: product.name,
+    searchQuery,
     searchUrl,
     finalUrl: scraped.url || loadedTab.url,
     productName: scraped.productName || null,
@@ -183,6 +201,27 @@ async function navigateAndScrape(tabId, product) {
       scraped.lowestHistoricalPriceSince2023 ?? null,
     checkedAt: new Date().toISOString(),
   };
+}
+
+async function navigateAndScrape(tabId, product) {
+  const firstResult = await navigateAndScrapeQuery(
+    tabId,
+    product,
+    product.name
+  );
+  const normalizedQuery = normalizeSearchQuery(product.name);
+  const shouldRetry =
+    firstResult.status === "not_found" &&
+    isCategorySearchUrl(firstResult.finalUrl) &&
+    normalizedQuery &&
+    normalizedQuery !== product.name;
+
+  if (!shouldRetry) return firstResult;
+
+  console.log(
+    `Árukereső: retrying without warranty suffix: ${normalizedQuery}`
+  );
+  return navigateAndScrapeQuery(tabId, product, normalizedQuery);
 }
 
 async function closeLookupTab(job) {
@@ -429,7 +468,7 @@ async function resumeJob(scraped, sender) {
   job.results[index].arukereso = {
     status: "matched",
     matchSource: "manual",
-    searchQuery: job.results[index].alza.name,
+    searchQuery: previousResult.searchQuery || job.results[index].alza.name,
     searchUrl: previousResult.searchUrl,
     finalUrl: scraped.url,
     productName: scraped.productName,
@@ -479,7 +518,7 @@ async function skipCurrentProduct(sender) {
   const previousResult = job.results[index].arukereso;
   job.results[index].arukereso = {
     status: "skipped",
-    searchQuery: job.results[index].alza.name,
+    searchQuery: previousResult.searchQuery || job.results[index].alza.name,
     searchUrl: previousResult.searchUrl,
     finalUrl: sender.tab.url || previousResult.finalUrl,
     productName: null,

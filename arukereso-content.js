@@ -10,6 +10,29 @@ function isSearchResultsPage() {
   return location.pathname.toLowerCase().endsWith("/categorysearch.php");
 }
 
+function hasNoSearchResults() {
+  const warning = document.querySelector(
+    "#product-list > .alert.alert-warning"
+  );
+  const message = cleanText(warning?.textContent).toLocaleLowerCase("hu-HU");
+
+  return /^nincs találat[.!]?$/.test(message);
+}
+
+function hasOnlySingleShopResults() {
+  const productCards = [
+    ...document.querySelectorAll("#product-list .product-box[data-akpid]"),
+  ];
+
+  return productCards.length > 0 && productCards.every(card => {
+    const action = card.querySelector(".top-right a.button-blue");
+    const actionText = cleanText(action?.textContent)
+      .toLocaleLowerCase("hu-HU");
+
+    return actionText.includes("irány a bolt");
+  });
+}
+
 function getProductName() {
   const selectors = [
     '#micro-data h1 > [itemprop="name"]',
@@ -32,12 +55,23 @@ function getProductName() {
 }
 
 function getLowestPrice() {
-  const element = document.querySelector(
+  const structuredPrice = document.querySelector(
     '#micro-data [itemprop="offers"] [itemprop="lowPrice"]'
   );
-  const price = Number(element?.getAttribute("content"));
+  const structuredContent = structuredPrice?.getAttribute("content");
+  const structuredValue = structuredContent ? Number(structuredContent) : null;
 
-  return Number.isFinite(price) ? Math.round(price) : null;
+  if (Number.isFinite(structuredValue)) {
+    return Math.round(structuredValue);
+  }
+
+  const fallbackPrice = document.querySelector(
+    '#micro-data .product-page-top .product-details > span.price'
+  );
+  const digits = cleanText(fallbackPrice?.textContent).replace(/\D/g, "");
+  const fallbackValue = digits ? Number(digits) : null;
+
+  return Number.isFinite(fallbackValue) ? fallbackValue : null;
 }
 
 function isTopProduct() {
@@ -168,6 +202,22 @@ async function getOptionalProductData() {
 
 async function scrapeArukeresoPage() {
   if (isSearchResultsPage()) {
+    if (hasNoSearchResults()) {
+      return {
+        status: "not_found",
+        url: location.href,
+        productName: null,
+      };
+    }
+
+    if (hasOnlySingleShopResults()) {
+      return {
+        status: "skipped_single_shop",
+        url: location.href,
+        productName: null,
+      };
+    }
+
     return {
       status: "manual_review",
       url: location.href,
@@ -185,13 +235,24 @@ async function scrapeArukeresoPage() {
     };
   }
 
+  const lowestPrice = getLowestPrice();
+
+  if (lowestPrice === null) {
+    return {
+      status: "skipped_missing_lowest_price",
+      url: location.href,
+      productName,
+      lowestPrice: null,
+    };
+  }
+
   const optionalData = await getOptionalProductData();
 
   return {
     status: "matched",
     url: location.href,
     productName,
-    lowestPrice: getLowestPrice(),
+    lowestPrice,
     isTopProduct: isTopProduct(),
     ...optionalData,
   };
@@ -356,4 +417,6 @@ initializeManualControls();
 window.arukeresoScraper = {
   scrapeArukeresoPage,
   getProductName,
+  hasNoSearchResults,
+  hasOnlySingleShopResults,
 };
