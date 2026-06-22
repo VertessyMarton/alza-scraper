@@ -1,6 +1,7 @@
 const STORAGE_KEY = "alzaArukeresoJob";
 const PAGE_LOAD_TIMEOUT = 20000;
 const CONTENT_SCRIPT_TIMEOUT = 5000;
+const MPN_FETCH_TIMEOUT = 10000;
 const LOOKUP_DELAY = 500;
 
 let activeJobPromise = null;
@@ -102,6 +103,71 @@ function normalizeSearchQuery(productName) {
     .trim();
 }
 
+function findProductJsonLd(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const product = findProductJsonLd(item);
+      if (product) return product;
+    }
+    return null;
+  }
+
+  if (!value || typeof value !== "object") return null;
+
+  const types = Array.isArray(value["@type"])
+    ? value["@type"]
+    : [value["@type"]];
+
+  if (types.includes("Product")) return value;
+
+  return findProductJsonLd(value["@graph"]);
+}
+
+function extractMpnFromHtml(html) {
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+
+  for (const script of scripts) {
+    try {
+      const product = findProductJsonLd(JSON.parse(script.textContent));
+      const mpn = String(product?.mpn || "").trim();
+      if (mpn) return mpn;
+    } catch {
+      // Ignore unrelated or malformed JSON-LD blocks.
+    }
+  }
+
+  return null;
+}
+
+function isUsableMpn(mpn) {
+  return typeof mpn === "string" &&
+    mpn.length >= 3 &&
+    mpn.length <= 50 &&
+    /\d/.test(mpn) &&
+    !/\s/.test(mpn);
+}
+
+async function getAlzaMpn(productUrl) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MPN_FETCH_TIMEOUT);
+
+  try {
+    const response = await fetch(productUrl, {
+      credentials: "include",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Alza product request failed: ${response.status}`);
+    }
+
+    return extractMpnFromHtml(await response.text());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function isCategorySearchUrl(url) {
   try {
     return new URL(url).pathname.toLowerCase().endsWith("/categorysearch.php");
@@ -179,7 +245,12 @@ async function sendScrapeMessage(tabId) {
   throw lastError || new Error("Árukereső content script did not respond.");
 }
 
-async function navigateAndScrapeQuery(tabId, product, searchQuery) {
+async function navigateAndScrapeQuery(
+  tabId,
+  product,
+  searchQuery,
+  matchSource
+) {
   const searchUrl = createSearchUrl(searchQuery);
   const loaded = waitForTabToLoad(tabId);
 
@@ -189,7 +260,7 @@ async function navigateAndScrapeQuery(tabId, product, searchQuery) {
 
   return {
     status: scraped.status,
-    matchSource: scraped.status === "matched" ? "automatic" : null,
+    matchSource: scraped.status === "matched" ? matchSource : null,
     searchQuery,
     searchUrl,
     finalUrl: scraped.url || loadedTab.url,
@@ -204,10 +275,39 @@ async function navigateAndScrapeQuery(tabId, product, searchQuery) {
 }
 
 async function navigateAndScrape(tabId, product) {
+  if (product.mpn === undefined) {
+    try {
+      product.mpn = await getAlzaMpn(product.productUrl);
+    } catch (error) {
+      product.mpn = null;
+      console.warn(`Could not extract MPN for ${product.name}.`, error);
+    }
+  }
+
+  if (isUsableMpn(product.mpn)) {
+    const mpnResult = await navigateAndScrapeQuery(
+      tabId,
+      product,
+      product.mpn,
+      "mpn"
+    );
+
+    if (mpnResult.status !== "not_found") return mpnResult;
+
+    console.log(
+      `Árukereső: no result for MPN ${product.mpn}; retrying by name.`
+    );
+  } else if (product.mpn) {
+    console.log(
+      `Árukereső: ignoring non-code MPN "${product.mpn}"; searching by name.`
+    );
+  }
+
   const firstResult = await navigateAndScrapeQuery(
     tabId,
     product,
-    product.name
+    product.name,
+    "name"
   );
   const normalizedQuery = normalizeSearchQuery(product.name);
   const shouldRetry =
@@ -221,7 +321,12 @@ async function navigateAndScrape(tabId, product) {
   console.log(
     `Árukereső: retrying without warranty suffix: ${normalizedQuery}`
   );
-  return navigateAndScrapeQuery(tabId, product, normalizedQuery);
+  return navigateAndScrapeQuery(
+    tabId,
+    product,
+    normalizedQuery,
+    "normalized_name"
+  );
 }
 
 async function closeLookupTab(job) {

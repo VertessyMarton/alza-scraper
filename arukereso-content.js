@@ -55,6 +55,28 @@ function getProductName() {
 }
 
 function getLowestPrice() {
+  const offerPrices = [
+    ...document.querySelectorAll('#offers .optoffer[itemprop="offers"]'),
+  ]
+    .filter(offer => {
+      const shopName = offer
+        .querySelector("img.logo-host[alt]")
+        ?.getAttribute("alt")
+        ?.toLocaleLowerCase("hu-HU") || "";
+
+      return !shopName.includes("allegro");
+    })
+    .map(offer => Number(
+      offer
+        .querySelector('.row-price [itemprop="price"][content]')
+        ?.getAttribute("content")
+    ))
+    .filter(Number.isFinite);
+
+  if (offerPrices.length > 0) {
+    return Math.round(Math.min(...offerPrices));
+  }
+
   const structuredPrice = document.querySelector(
     '#micro-data [itemprop="offers"] [itemprop="lowPrice"]'
   );
